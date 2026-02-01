@@ -1,0 +1,64 @@
+# Backup the old file
+mv ~/honeypot.py ~/honeypot.old.$(date +%s)
+
+# Write new file
+cat > ~/honeypot.py <<'PY'
+#!/usr/bin/env python3
+"""
+Minimal educational honeypot.
+Listens on TCP/2222, pretends to be SSH, logs credentials.
+"""
+
+import socketserver, datetime, os
+
+HOST, PORT = "0.0.0.0", 2222
+LOGDIR = os.path.expanduser("~/simple-honeypot")
+os.makedirs(LOGDIR, exist_ok=True)
+LOGFILE = os.path.join(LOGDIR, "honeypot.log")
+
+BANNER = b"SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.5\r\n"
+PROMPT_USER = b"login: "
+PROMPT_PASS = b"Password: "
+
+def log(line):
+    with open(LOGFILE, "a") as f:
+        f.write(line + "\n")
+
+class Handler(socketserver.BaseRequestHandler):
+    def handle(self):
+        ip, port = self.client_address
+        ts = datetime.datetime.utcnow().isoformat()
+        try:
+            self.request.sendall(BANNER)
+            self.request.sendall(PROMPT_USER)
+            user = self._recvline()
+            self.request.sendall(PROMPT_PASS)
+            pw = self._recvline()
+            entry = f"{ts} | {ip}:{port} | username={user!r} password={pw!r}"
+            print(entry)
+            log(entry)
+            self.request.sendall(b"\r\nPermission denied\r\n")
+        except Exception as e:
+            log(f"{ts} | {ip}:{port} | ERROR: {e}")
+
+    def _recvline(self, timeout=20):
+        self.request.settimeout(timeout)
+        data = b""
+        while True:
+            chunk = self.request.recv(1024)
+            if not chunk: break
+            data += chunk
+            if b"\n" in chunk or b"\r" in chunk: break
+        return data.strip().decode(errors="replace")
+
+if __name__ == "__main__":
+    print(f"Honeypot listening on {HOST}:{PORT}, logging to {LOGFILE}")
+    with socketserver.ThreadingTCPServer((HOST, PORT), Handler) as srv:
+        try:
+            srv.serve_forever()
+        except KeyboardInterrupt:
+            print("\nStopping honeypot.")
+            srv.shutdown()
+PY
+
+chmod +x ~/honeypot.py
